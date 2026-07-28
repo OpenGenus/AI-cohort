@@ -46,7 +46,7 @@ def make_requests():
     return reqs
 
 
-def serve(reqs, servers, jobkey):
+def _serve(reqs, servers, jobkey):
     """FIFO across 'servers' identical workers; returns (start, finish) per request.
     Each request in arrival order goes to the earliest-free worker. `jobkey(r)` is the
     service time on this pool."""
