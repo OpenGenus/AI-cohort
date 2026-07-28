@@ -54,27 +54,27 @@ def get_info():
             if line.startswith("flags"):
                 flags = line.split(":", 1)[1]
                 break
-                watch = ["avx2", "avx512f", "avx512_vnni", "avx512_bf16", "amx_bf16", "amx_int8", "f16c"]
-                present = [f for f in watch if (" " + f + " ") in (" " + flags + " ")]
-                info["isa_features"] = ", ".join(present) if present else "none of the watched set"
-            except Exception:
-                pass
+        watch = ["avx2", "avx512f", "avx512_vnni", "avx512_bf16", "amx_bf16", "amx_int8", "f16c"]
+        present = [f for f in watch if (" " + f + " ") in (" " + flags + " ")]
+        info["isa_features"] = ", ".join(present) if present else "none of the watched set"
+    except Exception:
+        pass
 
-            try:
-                import numpy
-                info["numpy"] = numpy.__version__
-            except Exception:
-                pass
+    try:
+        import numpy
+        info["numpy"] = numpy.__version__
+    except Exception:
+        pass
 
-            try:
-                os.environ.setdefault("TORCH_DEVICE_BACKEND_AUTOLOAD", "0")
-                import torch
-                info["torch"] = torch.__version__
-                info["torch_threads"] = torch.get_num_threads()
-            except Exception:
-                pass
+    try:
+        os.environ.setdefault("TORCH_DEVICE_BACKEND_AUTOLOAD", "0")
+        import torch
+        info["torch"] = torch.__version__
+        info["torch_threads"] = torch.get_num_threads()
+    except Exception:
+        pass
 
-            return info
+    return info
 
 
 def header():
