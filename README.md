@@ -235,6 +235,81 @@ raises throughput — the throughput-vs-latency trade-off real serving stacks (v
 are built around. Optional 8-bit quantization shows the memory/accuracy trade-off
 (ties back to M3).
 
+## M7 - Build an inference server with dynamic batching (the serving payoff)
+
+M6 showed a bigger *batch* means more tokens/sec. But real requests arrive one at a time.
+`m7_server.py` is a ~120-line FastAPI server that **collects requests arriving close together
+and runs them as ONE batch** - the core trick behind every production LLM server.
+
+```bash
+pip install -r requirements-serve.txt
+python m7_server.py          # serves http://0.0.0.0:8000 (GPU strongly recommended)
+# in another terminal:
+python m7_loadtest.py        # p50/p99 latency + requests/sec at rising concurrency
+```
+
+Expected story: at concurrency 1 the server can't batch, so req/s is low. As concurrency rises,
+the scheduler batches co-arriving requests -> **total req/s climbs while per-request latency rises
+modestly**, until the GPU saturates. Re-run the server with `MAX_BATCH=1` and compare - throughput
+stops scaling. That gap is exactly what dynamic batching buys you.
+
+**Knobs:** `MAX_BATCH` (batch cap) and `MAX_WAIT_MS` (how long to wait for a batch to fill) - the two
+dials every serving team tunes. This is *request-level* batching; vLLM/TGI add *token-level* continuous
+batching + a paged KV-cache on top of the same idea.
+
+**No GPU? Run it in simulation mode** - only needs `fastapi` + `uvicorn`, no model/torch/download:
+```bash
+pip install fastapi uvicorn
+SIM=1 python m7_server.py        # fake forward pass; batching logic is identical
+python m7_loadtest.py            # you still see req/s scale with concurrency, then plateau at MAX_BATCH
+```
+
+Example SIM run (req/s scales ~1x -> 8x as concurrency rises, then plateaus at MAX_BATCH=8):
+```text
+concurrency   p50 (s)   req/s
+         1     0.524     1.91
+         8     0.519    15.38
+        16     1.027    15.49   <- past the batch cap: latency doubles, throughput flat
+```
+
+---
+
+## M8 - Model-level optimization: the KV cache
+
+The single most important *model-level* inference trick. During decoding, each new token
+attends to all previous tokens; the naive approach recomputes every past key/value every step
+(work ~O(n^2) per step). The **KV cache** stores them and computes only the new token
+(~O(n) per step) - same output, far less work.
+
+`m8_kv_cache.py` implements one causal-attention block **twice** (no-cache vs cache), proves
+they emit **identical tokens**, and times both as the sequence grows. Pure CPU, no GPU.
+
+```bash
+python3 m8_kv_cache.py
+```
+Expected: `identical tokens` True`, and the cache's speedup **grows with length** - which is why
+every LLM server keeps one. Its cost is memory (the STUDENT TODO computes the KV-cache size for a
+real model - the reason paged / quantized KV caches exist).
+
+## M9 - System-level optimization: prefill/decode (P/D) disaggregation
+
+A request has two phases with opposite profiles: **prefill** (compute-heavy, bursty, short) and
+**decode** (latency-sensitive, steady, long). Colocating them lets a big prefill stall in-flight
+decodes -> spiky time-to-first-token (TTFT). **Disaggregation** runs prefill and decode on separate
+worker pools (DistServe / Splitwise / vLLM P/D).
+
+`m9_pd_disagg.py` is a ~120-line discrete-event simulation (stdlib only, no GPU) that compares both
+topologies with the same total workers:
+
+```bash
+python3 m9_pd_disagg.py          # knobs: RATE, WORKERS, PREFILL_P
+```
+
+Example: TTFT p99 **1289 ms (colocated) -> 118 ms (disaggregated)**, ~11x better, because a new
+request's first token no longer waits behind others' decodes. End-to-end latency is governed by the
+**decode** pool - the lesson being that disaggregation lets you scale prefill (for TTFT) and decode
+(for throughput) *independently*. Raise `RATE` to watch colocation's TTFT balloon.
+
 **Capstone:** fill in `capstone_report_template.md` with **your** CPU (M0-M4) and **your** GPU
 (M5-M6) numbers, explained with one roofline. That report is the CV artifact.
 
